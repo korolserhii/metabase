@@ -602,10 +602,10 @@ export class UnconnectedDataSelector extends Component<
         await this.switchToStep(STEP_BY_CARD_TYPE[selectedCardType]);
       }
     } else if (
+      this.props.canSelectTable &&
       // Schema id is explicitly set when going through the New > Question/Model flow,
       // whereas we have to obtain it from the state when opening a saved question.
-      this.state.selectedSchemaId ||
-      this.state.selectedSchema?.id
+      (this.state.selectedSchemaId || this.state.selectedSchema?.id)
     ) {
       await this.switchToStep(TABLE_STEP);
     } else if (this.isJoinStep()) {
@@ -614,9 +614,11 @@ export class UnconnectedDataSelector extends Component<
         await this.switchToStep(MODEL_STEP, {}, false);
       } else if (querySourceType === "question") {
         await this.switchToStep(SAVED_QUESTION_STEP, {}, false);
-      } else {
+      } else if (this.props.canSelectTable) {
         // query source is a table
         await this.switchToStep(SCHEMA_STEP);
+      } else {
+        await this.switchToStep(DATA_BUCKET_STEP);
       }
     } else if (this.props.canSelectTable && !this.hasUsableSavedEntities()) {
       await this.switchToStep(DATABASE_STEP);

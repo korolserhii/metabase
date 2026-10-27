@@ -378,6 +378,42 @@ describe("scenarios > embedding-sdk > interactive-question > creating a question
     });
   });
 
+  it('should keep a join in the staged picker to the semantic layer when `entityTypes` = ["semantic-layer"]', () => {
+    // Publishes only Orders
+    createLibraryWithTable();
+    cy.signOut();
+    mockAuthProviderAndJwtSignIn();
+
+    mountSdkContent(
+      <div style={{ display: "flex", padding: "20px" }}>
+        <InteractiveQuestion
+          questionId="new"
+          dataPicker="staged"
+          entityTypes={["semantic-layer"]}
+        />
+      </div>,
+    );
+
+    getSdkRoot().findByText("Pick your starting data").should("be.visible");
+
+    H.popover().findByText("Orders").click();
+    getSdkRoot().within(() => {
+      cy.button("Join data").click();
+    });
+
+    cy.log("the join lists the table published in the semantic layer");
+    H.popover().within(() => {
+      cy.findByText("Orders").should("be.visible");
+      cy.findByText("Reviews").should("not.exist");
+    });
+
+    cy.log("there is no way back out of the semantic layer");
+    H.popover().within(() => {
+      cy.findByTestId("saved-entity-title").should("have.text", "Data");
+      cy.findByTestId("saved-entity-back-navigation").should("not.exist");
+    });
+  });
+
   [
     {
       targetCollectionId: "personal",

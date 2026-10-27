@@ -24,6 +24,7 @@ import {
 import type {
   Collection,
   Database,
+  DatabaseId,
   SearchModel,
   Table,
   TableId,
@@ -140,6 +141,7 @@ interface SetupOpts {
     id: TableId;
     databaseId: number;
   };
+  selectedDatabaseId?: DatabaseId;
   entityTypes?: EmbeddingEntityType[];
   libraryCollection?: Collection;
   hasNestedQueriesEnabled?: boolean;
@@ -151,6 +153,7 @@ function setup({
   querySourceType,
   availableModels,
   selectedTable,
+  selectedDatabaseId = selectedTable?.databaseId,
   entityTypes,
   libraryCollection,
   hasNestedQueriesEnabled = true,
@@ -249,7 +252,7 @@ function setup({
       isInitiallyOpen
       querySourceType={querySourceType}
       canChangeDatabase={!isJoinStep}
-      selectedDatabaseId={selectedTable ? selectedTable.databaseId : null}
+      selectedDatabaseId={selectedDatabaseId ?? null}
       selectedTableId={selectedTable ? selectedTable.id : undefined}
       canSelectModel={entityTypes ? entityTypes.includes("model") : true}
       canSelectTable={entityTypes ? entityTypes.includes("table") : true}
@@ -804,6 +807,37 @@ describe("DataSourceSelector", () => {
       expect(await screen.findByText("Published Orders")).toBeInTheDocument();
       expect(screen.queryByText("Published Elsewhere")).not.toBeInTheDocument();
       expect(screen.queryByText("Metrics")).not.toBeInTheDocument();
+    });
+
+    it('should open a join on the semantic layer\'s tables, with no way back to the raw tables, when `entityTypes` = ["semantic-layer"]', async () => {
+      setup({
+        ...setupOpts,
+        libraryCollection: LIBRARY_COLLECTION,
+        entityTypes: ["semantic-layer"],
+        isJoinStep: true,
+        selectedDatabaseId: SAMPLE_DB_ID,
+      });
+
+      expect(await screen.findByText("Published Orders")).toBeInTheDocument();
+      expect(screen.queryByText("Published Elsewhere")).not.toBeInTheDocument();
+      expect(screen.queryByText("Orders")).not.toBeInTheDocument();
+      expect(screen.getByTestId("saved-entity-title")).toHaveTextContent(
+        "Data",
+      );
+    });
+
+    it('should open on the semantic layer, not the raw tables, when reopened with a published table and `entityTypes` = ["semantic-layer"]', async () => {
+      setup({
+        ...setupOpts,
+        libraryCollection: LIBRARY_COLLECTION,
+        entityTypes: ["semantic-layer"],
+        selectedTable: { id: ORDERS_ID, databaseId: SAMPLE_DB_ID },
+      });
+
+      expect(await screen.findByText("Semantic layer")).toBeInTheDocument();
+      expect(await screen.findByText("Data")).toBeInTheDocument();
+      expect(screen.queryByText("Raw Data")).not.toBeInTheDocument();
+      expect(screen.queryByText("Orders")).not.toBeInTheDocument();
     });
 
     it("should return to the bucket step when closing the semantic layer via its back button", async () => {
