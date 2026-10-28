@@ -704,7 +704,7 @@ export class UnconnectedDataSelector extends Component<
       case DATA_BUCKET_STEP:
         return this.hasDataBucketChoice();
       case DATABASE_STEP:
-        return true;
+        return this.getDatabases().length > 1;
       case SCHEMA_STEP:
         return this.state.schemas.length > 1;
       case TABLE_STEP:
@@ -737,11 +737,16 @@ export class UnconnectedDataSelector extends Component<
     }
   };
 
-  previousStep = (): void => {
+  previousStep = async (): Promise<void> => {
     const previousStep = this.getPreviousStep();
     if (previousStep) {
       const clearedState = this.getClearedStateForStep(previousStep);
-      this.switchToStep(previousStep, clearedState, false);
+      await this.switchToStep(previousStep, clearedState, false);
+      if (previousStep === DATABASE_STEP) {
+        // Back from a reopened saved card lands here too: with one database,
+        // skip its one-entry list as the fresh path does
+        await this.selectOnlyDatabase();
+      }
     }
   };
 
@@ -855,7 +860,8 @@ export class UnconnectedDataSelector extends Component<
     selectedDataBucketId: DataPickerDataType,
   ): Promise<void> => {
     if (selectedDataBucketId === DATA_BUCKET.RAW_DATA) {
-      await this.switchToStep(DATABASE_STEP);
+      await this.switchToStep(DATABASE_STEP, {}, false);
+      await this.selectOnlyDatabase();
       return;
     }
 
@@ -870,6 +876,16 @@ export class UnconnectedDataSelector extends Component<
       await this.switchToStep(METRIC_STEP, {}, false);
     } else {
       await this.switchToStep(SAVED_QUESTION_STEP, {}, false);
+    }
+  };
+
+  // Pick the only database where `skipSteps` doesn't: when one is already set
+  // (at a join, or reopened on a table), and going back from a reopened saved
+  // card, which switches steps without skipping
+  selectOnlyDatabase = async (): Promise<void> => {
+    const databases = this.getDatabases();
+    if (databases.length === 1) {
+      await this.onChangeDatabase(databases[0]);
     }
   };
 
