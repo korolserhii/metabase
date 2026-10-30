@@ -869,7 +869,7 @@
 
   data-apps
   {:team "Embedding"
-   :api #{metabase.data-apps.core}
+   :api #{metabase.data-apps.core metabase.data-apps.schema}
    :uses #{actions
            analytics
            api
@@ -2952,6 +2952,7 @@
            api
            api-keys
            app-db
+           data-apps
            lib
            lib.be
            lib.schema
@@ -3870,7 +3871,6 @@
            permissions
            premium-features
            queries
-           remote-sync
            search
            settings
            system
