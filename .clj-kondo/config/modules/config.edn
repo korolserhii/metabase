@@ -333,6 +333,7 @@
    :ns-prefix "metabase.eid-translation"
    :api #{metabase.eid-translation.api metabase.eid-translation.core metabase.eid-translation.init}
    :uses #{api
+           api-scope
            batch-processing
            settings
            util}

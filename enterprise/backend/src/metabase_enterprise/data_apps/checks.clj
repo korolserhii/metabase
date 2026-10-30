@@ -29,12 +29,22 @@
   (ex-info message {:status-code 400}))
 
 (defenterprise request-data-app
-  "The data app whose slug a data-app `request` names by [[data-apps/data-app-slug]], read-checked, so a missing app is
-  a 404 and an unreadable one a 403; nil for a request that is not a data app's."
+  "The handle a data-app `request` is checked as: the `:app` its slug names by [[data-apps/data-app-slug]], read-checked,
+  so a missing app is a 404 and an unreadable one a 403, or, for a dev preview's request, a `:preview`, whatever its
+  slug; nil for a request that is not a data app's."
   :feature :data-apps
   [request]
   (when (data-apps/data-app-request? request)
-    (api/read-check (some-> (data-apps/data-app-slug request) data-apps.db/data-app-by-slug))))
+    (if (data-apps/data-app-dev-request? request)
+      {:type :preview}
+      {:type :app
+       :app  (api/read-check (some-> (data-apps/data-app-slug request) data-apps.db/data-app-by-slug))})))
+
+(defn- app-collection-id
+  "The ID of the collection of the app the handle `data-app` names, or nil for a dev preview, which reads the Library
+  alone."
+  [data-app]
+  (get-in data-app [:app :resource_collection_id]))
 
 (defn- format-ids
   "`ids` in order, for an error message."
@@ -44,7 +54,7 @@
 (defn- in-app-collection?
   "Whether `entity` is in `data-app`'s collection."
   [data-app entity]
-  (let [collection-id (:resource_collection_id data-app)]
+  (let [collection-id (app-collection-id data-app)]
     (and (some? collection-id) (= collection-id (:collection_id entity)))))
 
 (defenterprise-schema check-query :- :nil
@@ -52,7 +62,7 @@
   cards in `data-app`'s collection, tables published to the Library (joins included), Library metrics, and segments and
   measures of published tables."
   :feature :data-apps
-  [data-app :- ::data-apps.schema/data-app
+  [data-app :- ::data-apps.schema/data-app.handle
    query    :- ::lib-be.schema/maybe-legacy-or-internal-query]
   (when (= :internal (keyword (:type query)))
     (throw (data-app-error (tru "A data app cannot run internal queries."))))
@@ -61,7 +71,7 @@
     (when (lib/any-native-stage? query)
       (throw (data-app-error (tru "A data app cannot run native queries."))))
     (when-let [external (some->> (not-empty card-ids)
-                                 (data-apps.db/external-card-ids (:resource_collection_id data-app))
+                                 (data-apps.db/external-card-ids (app-collection-id data-app))
                                  not-empty)]
       (throw (data-app-error (tru "A data app can use only the cards in its own collection, not the cards {0}."
                                   (format-ids external)))))
@@ -103,7 +113,7 @@
   "Throws a 400 unless the card with `card-id` is in `data-app`'s collection or in the Library, after a read check of
   the card."
   :feature :data-apps
-  [data-app :- ::data-apps.schema/data-app
+  [data-app :- ::data-apps.schema/data-app.handle
    card-id  :- ::lib.schema.id/card]
   (read-checked-app-card data-app card-id)
   nil)
@@ -126,7 +136,7 @@
   `param-key` takes its values from a static list, such a card other than a dashboard question, or a field of a table
   published to the Library, after read checks of each."
   :feature :data-apps
-  [data-app  :- ::data-apps.schema/data-app
+  [data-app  :- ::data-apps.schema/data-app.handle
    card-id   :- ::lib.schema.id/card
    param-key :- ::lib.schema.parameter/id]
   (let [card      (read-checked-app-card data-app card-id)
@@ -142,7 +152,7 @@
   a dashboard question, or the fields with `field-ids`, each of a table published to the Library, after read checks
   of each."
   :feature :data-apps
-  [data-app  :- ::data-apps.schema/data-app
+  [data-app  :- ::data-apps.schema/data-app.handle
    parameter :- ::parameters.schema/parameter
    field-ids :- [:maybe [:sequential ::lib.schema.id/field]]]
   (case (some-> (:values_source_type parameter) keyword)
@@ -154,7 +164,7 @@
 (defenterprise-schema check-action :- :nil
   "Throws a 400 unless the action with `action-id` is in `data-app`'s collection, after a read check of the action."
   :feature :data-apps
-  [data-app  :- ::data-apps.schema/data-app
+  [data-app  :- ::data-apps.schema/data-app.handle
    action-id :- ::lib.schema.id/action]
   (when-not (in-app-collection? data-app (api/read-check :model/Action action-id))
     (throw (data-app-error (tru "A data app can run only the actions in its own collection, not the action {0}."
@@ -164,14 +174,14 @@
 (defenterprise-schema data-app-actions :- [:sequential ::actions.schema/action]
   "The `actions` in `data-app`'s collection."
   :feature :data-apps
-  [data-app :- ::data-apps.schema/data-app
+  [data-app :- ::data-apps.schema/data-app.handle
    actions  :- [:sequential ::actions.schema/action]]
   (filterv (partial in-app-collection? data-app) actions))
 
 (defenterprise-schema check-table :- :nil
   "Throws a 400 unless the table with `table-id` is published to the Library, after a read check of the table."
   :feature :data-apps
-  [_data-app :- ::data-apps.schema/data-app
+  [_data-app :- ::data-apps.schema/data-app.handle
    table-id  :- ::lib.schema.id/table]
   (api/read-check :model/Table table-id)
   (when-not (published-table? table-id)
@@ -182,7 +192,7 @@
   "Throws a 400 unless the field with `field-id` belongs to a table published to the Library, after a read check of
   the field."
   :feature :data-apps
-  [_data-app :- ::data-apps.schema/data-app
+  [_data-app :- ::data-apps.schema/data-app.handle
    field-id  :- ::lib.schema.id/field]
   (check-published-field field-id)
   nil)
@@ -191,7 +201,7 @@
   "Throws a 400 unless the database with `database-id` has a table published to the Library, after a read check of the
   database."
   :feature :data-apps
-  [_data-app   :- ::data-apps.schema/data-app
+  [_data-app   :- ::data-apps.schema/data-app.handle
    database-id :- ::lib.schema.id/database]
   (api/read-check :model/Database database-id)
   (when-not (some #(= database-id (:db_id %)) (data-apps.db/published-tables))
@@ -206,7 +216,7 @@
 (defenterprise-schema check-user-key-value :- :nil
   "Throws a 400 unless the user key-value `k` in `nmspace` is one the SDK uses inside a data app."
   :feature :data-apps
-  [_data-app :- ::data-apps.schema/data-app
+  [_data-app :- ::data-apps.schema/data-app.handle
    nmspace   :- :string
    k         :- :string]
   (when-not (contains? sdk-user-key-values [nmspace k])
@@ -217,14 +227,14 @@
 (defenterprise-schema data-app-collection-types :- [:maybe [:set :string]]
   "The types of the Library and of its collections, which their subcollections inherit."
   :feature :data-apps
-  [_data-app :- ::data-apps.schema/data-app]
+  [_data-app :- ::data-apps.schema/data-app.handle]
   collections/library-collection-types)
 
 (defenterprise-schema check-collection :- :nil
   "Throws a 400 unless the collection with `collection-id` is of a type in [[data-app-collection-types]], after a read
   check of the collection."
   :feature :data-apps
-  [data-app      :- ::data-apps.schema/data-app
+  [data-app      :- ::data-apps.schema/data-app.handle
    collection-id :- ::lib.schema.id/collection]
   (when-not (contains? (data-app-collection-types data-app) (:type (api/read-check :model/Collection collection-id)))
     (throw (data-app-error (tru "A data app can see only the Library and its collections, not the collection {0}."
@@ -234,7 +244,7 @@
 (defenterprise-schema check-dashboard :- :nil
   "Throws a 400 unless the dashboard with `dashboard-id` is in the Library, after a read check of the dashboard."
   :feature :data-apps
-  [_data-app    :- ::data-apps.schema/data-app
+  [_data-app    :- ::data-apps.schema/data-app.handle
    dashboard-id :- ::lib.schema.id/dashboard]
   (when-not (in-library? (api/read-check :model/Dashboard dashboard-id))
     (throw (data-app-error (tru "A data app can use only the dashboards in the Library, not the dashboard {0}."

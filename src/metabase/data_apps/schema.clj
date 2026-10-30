@@ -98,6 +98,16 @@
     [:id              ms/PositiveInt]
     [:bundle_hash     {:optional true} [:maybe :string]]]])
 
+(mr/def ::data-app.handle
+  "What a data app's request is checked as: the `:app` it names, or a dev `:preview`, which needs no app on the
+  instance."
+  [:multi {:dispatch :type}
+   [:app     [:map {:closed true}
+              [:type [:= :app]]
+              [:app  ::data-app]]]
+   [:preview [:map {:closed true}
+              [:type [:= :preview]]]]])
+
 (mr/def ::data-app.update
   "What an update (or insert) of a DataApp accepts: every column of `:data_app` except `id` and the `bundle_hash` the
   model computes, all optional."

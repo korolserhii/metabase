@@ -61,6 +61,7 @@
   select-action
   select-actions
   select-actions-for-ids
+  unsaved-action
   update!]
  [metabase.actions.events
   publish-action-success!]

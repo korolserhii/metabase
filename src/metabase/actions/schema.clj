@@ -184,6 +184,10 @@
   "Schema for inserting a new Action internally."
   (action-schema :insert false))
 
+(mr/def ::action.executable
+  "An Action that can be executed: one selected from the app DB, or an implicit one built without saving it."
+  [:or ::action ::action.for-insert])
+
 (mr/def ::action.for-update
   "Schema for updating an Action internally."
   (action-schema :update false))

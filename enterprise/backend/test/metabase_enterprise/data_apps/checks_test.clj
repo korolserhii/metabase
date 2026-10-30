@@ -108,6 +108,11 @@
      (testing "a data app's request that names no app, or an app that doesn't exist, is not found"
        (doseq [options [(as-app nil) (as-app "no-such-app")]]
          (is (= "Not found." (run-query 404 (card-query card-id) options)))))
+     (testing "a dev preview's request reads the Library alone, whether its app exists or not"
+       (doseq [app-name ["no-such-app" "birds"]
+               :let [options (assoc-in (as-app app-name) [:request-options :headers "x-metabase-data-app-dev"] "true")]]
+         (is (= "completed" (:status (run-query 202 (-> (table-query :venues) (lib/limit 1)) options))))
+         (is (= (error-message :cards card-id) (run-query 400 (card-query card-id) options)))))
      (testing "an app the user can't read is refused"
        (is (= "You don't have permissions to do that."
               (mt/user-http-request :rasta :post 403 "dataset" as-data-app (card-query card-id))))))))
