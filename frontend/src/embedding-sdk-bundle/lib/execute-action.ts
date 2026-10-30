@@ -1,11 +1,15 @@
+import { translateEntityId } from "embedding-sdk-bundle/lib/translate-entity-id";
 import type { SdkStore } from "embedding-sdk-bundle/store/types";
 import type {
   SdkActionDefinition,
   SdkActionId,
   SdkActionInput,
 } from "embedding-sdk-bundle/types/action";
-import { executeAction as executeActionMutation } from "metabase/api/action";
-import { isDataApp } from "metabase/embedding-sdk/config";
+import {
+  executeAction as executeActionMutation,
+  executeUnsavedAction as executeUnsavedActionMutation,
+} from "metabase/api/action";
+import { isDataApp, isDataAppDev } from "metabase/embedding-sdk/config";
 import type {
   BaseEntityId,
   ParametersForActionExecution,
@@ -48,20 +52,52 @@ const parseActionId = (
 
 const isActionDefinition = (
   input: SdkActionInput,
-): input is SdkActionDefinition => isObject(input) && "action" in input;
+): input is SdkActionDefinition => isObject(input) && "entityId" in input;
 
-function toExecutableActionId(input: SdkActionInput): SdkActionId {
-  if (isActionDefinition(input)) {
-    return input.action.id;
-  }
-
+function toRawActionId(input: SdkActionId): SdkActionId {
   if (isDataApp()) {
     throw new Error(
-      `Action ${input} was passed to \`useAction\` as a raw id. A data app must pass a \`defineAction(...)\` definition from its typed schema.`,
+      `Action ${input} was passed to \`useAction\` as a raw id. A data app must pass a \`defineAction(...)\` definition.`,
     );
   }
 
   return input;
+}
+
+async function executeDefinedAction(
+  reduxStore: SdkStore,
+  definition: SdkActionDefinition,
+  parameters: ActionParametersPayload,
+): Promise<ExecuteActionResult> {
+  if (isDataAppDev()) {
+    return reduxStore
+      .dispatch(
+        executeUnsavedActionMutation.initiate({
+          action: {
+            name: definition.kind,
+            type: "implicit",
+            kind: definition.kind,
+            table_id: definition.table.id,
+          },
+          // Forwarded unchanged: the SDK keeps the parameter bag loose, and the
+          // endpoint validates the values server-side.
+          parameters: parameters as ParametersForActionExecution,
+        }),
+      )
+      .unwrap();
+  }
+
+  const id = await translateEntityId(reduxStore, "action", definition.entityId);
+
+  return reduxStore
+    .dispatch(
+      executeActionMutation.initiate({
+        id,
+        // Forwarded unchanged, as above.
+        parameters: parameters as ParametersForActionExecution,
+      }),
+    )
+    .unwrap();
 }
 
 /**
@@ -77,10 +113,14 @@ export const executeAction =
     actionId,
     parameters = {},
   }: ExecuteActionParams): Promise<ExecuteActionResult> => {
+    if (isActionDefinition(actionId)) {
+      return executeDefinedAction(reduxStore, actionId, parameters);
+    }
+
     return reduxStore
       .dispatch(
         executeActionMutation.initiate({
-          id: parseActionId(toExecutableActionId(actionId)),
+          id: parseActionId(toRawActionId(actionId)),
           // Forwarded unchanged: the SDK keeps the parameter bag loose, and the
           // endpoint validates the values server-side.
           parameters: parameters as ParametersForActionExecution,

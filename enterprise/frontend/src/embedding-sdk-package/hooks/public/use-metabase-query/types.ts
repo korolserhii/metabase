@@ -447,6 +447,12 @@ type StageClauses<TDimension, TAggregation, TFilter> = {
 type TableQueryBase<TTable> = {
   source: TTable extends TableSchema ? SourceQuerySpec<TTable> : TableSchema;
   fields?: readonly FieldReference<TTable>[];
+  /**
+   * The entity ID of this query's question in the app's collection. A
+   * production build runs that question, which holds the query's clauses; the
+   * dev preview runs the table query itself.
+   */
+  entityId?: string;
 } & StageClauses<
   FieldReference<TTable>,
   AnyAggregation<TTable>,

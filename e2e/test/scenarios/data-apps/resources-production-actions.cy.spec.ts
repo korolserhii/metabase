@@ -79,7 +79,7 @@ describe(
 
         cy.wait("@execute")
           .its("request.url")
-          .should("contain", `/api/action/${action.entity_id}/execute`);
+          .should("contain", `/api/action/${action.id}/execute`);
       });
     });
   },

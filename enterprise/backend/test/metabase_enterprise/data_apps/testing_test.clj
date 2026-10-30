@@ -100,7 +100,8 @@
                 (is (str/includes? body "export const queries = {\n  venuesByCategory: defineQuery({"))
                 (is (str/includes? body (str "entityId: \"" (:entity_id card) "\"")))
                 (is (str/includes? body "name: \"count\"")))
-              (testing "an action is addressed by its entity ID and typed by its parameters"
+              (testing "an action is addressed by its entity ID and names its kind and table"
                 (is (str/includes? body "export const actions = {\n  renameVenue: defineAction({"))
-                (is (str/includes? body (str "id: \"" (t2/select-one-fn :entity_id :model/Action :id (:id action)) "\"")))
-                (is (str/includes? body "slug: \"name\""))))))))))
+                (is (str/includes? body (str "entityId: \"" (t2/select-one-fn :entity_id :model/Action :id (:id action)) "\"")))
+                (is (str/includes? body "kind: \"row/update\""))
+                (is (str/includes? body (str "id: " (mt/id :venues))))))))))))
