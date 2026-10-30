@@ -6,7 +6,6 @@
    [clojure.test :refer :all]
    [metabase.actions.models :as action]
    [metabase.actions.schema :as actions.schema]
-   [metabase.api.common :as api]
    [metabase.driver :as driver]
    [metabase.driver.mysql :as mysql]
    [metabase.lib.core :as lib]
@@ -233,8 +232,7 @@
 (deftest query-action-without-model-test
   (mt/test-drivers (mt/normal-drivers-with-feature :actions/custom)
     (testing "a query action can be inserted and updated without a model, and keeps its own collection"
-      (mt/with-temp [:model/Collection {coll-id :id} {:namespace "data-actions"}
-                     :model/Collection {app-id :id}  {:namespace "data-apps"}]
+      (mt/with-temp [:model/Collection {coll-id :id} {:namespace "data-actions"}]
         (mt/with-model-cleanup [:model/Action]
           (let [insert!   (fn [collection-id]
                             (action/insert! (lib/normalize ::actions.schema/action.for-insert
@@ -248,10 +246,7 @@
                     (action/select-action :id action-id)))
             (action/update! {:id action-id :name "Renamed"} (action/select-action :id action-id))
             (is (=? {:name "Renamed" :model_id nil :collection_id coll-id}
-                    (action/select-action :id action-id)))
-            (testing "a data app collection takes one too"
-              (is (=? {:model_id nil :collection_id app-id}
-                      (action/select-action :id (insert! app-id)))))))))))
+                    (action/select-action :id action-id)))))))))
 
 (deftest action-in-a-data-apps-collection-is-admin-only-test
   (testing "Only administrators write an action in a collection of the data apps namespace"
@@ -260,23 +255,20 @@
       (mt/with-model-cleanup [:model/Action]
         (let [action-in (fn [collection-id]
                           (lib/normalize ::actions.schema/action.for-insert
-                                         {:type          :query
+                                         {:type          :implicit
+                                          :kind          :row/create
                                           :name          "No model"
                                           :collection_id collection-id
-                                          :database_id   (mt/id)
-                                          :dataset_query (mt/native-query {:query "update categories set name = 'x' where id = 1"})}))
-              action    (action/select-action :id (action/insert! (action-in app-id)))
+                                          :table_id      (mt/id :categories)}))
               elsewhere (action/select-action :id (action/insert! (action-in coll-id)))]
           (mt/with-test-user :crowberto
-            (is (true? (mi/can-write? action)))
-            (is (true? (:can_write (t2/hydrate action :can_write))))
+            (is (true? (mi/can-write? elsewhere)))
             (is (true? (mi/can-create? :model/Action (action-in app-id))))
             (is (true? (mi/can-update? elsewhere {:collection_id app-id}))))
           (mt/with-test-user :rasta
-            (is (false? (mi/can-write? action)))
-            (is (thrown-with-msg? clojure.lang.ExceptionInfo #"You don't have permissions to do that."
-                                  (api/write-check :model/Action (:id action))))
-            (is (false? (mi/can-create? :model/Action (action-in app-id))))))))))
+            (is (false? (mi/can-write? elsewhere)))
+            (is (false? (mi/can-create? :model/Action (action-in app-id))))
+            (is (false? (mi/can-update? elsewhere {:collection_id app-id})))))))))
 
 (deftest implicit-action-requires-table-test
   (mt/test-drivers (mt/normal-drivers-with-feature :actions/custom)

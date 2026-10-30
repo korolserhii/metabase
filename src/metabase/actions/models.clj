@@ -1,6 +1,5 @@
 (ns metabase.actions.models
   (:require
-   [clojure.string :as str]
    [medley.core :as m]
    [metabase.actions.actions :as actions]
    [metabase.actions.db :as actions.db]
@@ -156,41 +155,18 @@
       (throw (model-collection-error)))
     (assoc action :collection_id model-collection-id)))
 
-(defn- query-card-ids
-  "The IDs of the Cards the native `query` reads through card template tags."
-  [query]
-  (into #{}
-        (keep (fn [path]
-                (let [{:keys [model id]} (last path)]
-                  (when (= "Card" model) id))))
-        (serdes/mbql-deps true query)))
-
 (defn- data-app-action-error
   "A 400 error for an action in a data app's collection, with `message`."
   [message]
   (ex-info message {:status-code 400}))
 
-(defn- check-data-app-action-query
-  "Throws when `query`, of an action in the Collection with `collection-id`, reads a card outside that collection
-  while the collection is a data app's."
-  [collection-id query]
-  (when (and (some? collection-id)
-             (perms/data-app-collection? collection-id))
-    (let [card-ids (query-card-ids query)
-          outside  (when (seq card-ids)
-                     (actions.db/card-ids-outside-collection card-ids collection-id))]
-      (when (seq outside)
-        (throw (data-app-action-error
-                (tru "An action in a data app''s collection can read only the app''s own cards, not card {0}."
-                     (str/join ", " (sort outside)))))))))
-
 (defn- check-data-app-action
-  "Throws unless `action`, when it is in a data app's collection, is a query or implicit action of no model that is
+  "Throws unless `action`, when it is in a data app's collection, is an implicit action on a table, of no model, that is
   neither archived nor public and whose parameters take no values from a card."
   [{collection-id :collection_id, :as action}]
   (when (and (some? collection-id) (perms/data-app-collection? collection-id))
-    (when (or (not (#{:query :implicit} (keyword (:type action)))) (:model_id action))
-      (throw (data-app-action-error (tru "An action in a data app''s collection must be a query or implicit action of no model."))))
+    (when (or (not= :implicit (keyword (:type action))) (:model_id action))
+      (throw (data-app-action-error (tru "An action in a data app''s collection must be an implicit action on a table."))))
     (when (:archived action)
       (throw (data-app-action-error (tru "An action in a data app''s collection can''t be archived."))))
     (when (:public_uuid action)
@@ -235,10 +211,8 @@
         (check-collection-content <>))
       (when (some #(contains? (t2/changes <>) %) [:collection_id :type :archived :public_uuid :parameters])
         (check-data-app-action <>))
-      (when (contains? (t2/changes <>) :collection_id)
-        (check-data-app-action-query (:collection_id <>) (:dataset_query (actions.db/query-action (:id <>))))
-        (when (implicit? <>)
-          (check-data-app-action-table (:collection_id <>) (actions.db/implicit-action-table-id (:id <>))))))))
+      (when (and (contains? (t2/changes <>) :collection_id) (implicit? <>))
+        (check-data-app-action-table (:collection_id <>) (actions.db/implicit-action-table-id (:id <>)))))))
 
 (defn- set-query-database
   "`query-action` with the `:database_id` of its query, when it has one, as a row copied whole may hold its query
@@ -250,14 +224,11 @@
 
 (t2/define-before-insert :model/QueryAction
   [query-action]
-  (u/prog1 (set-query-database query-action)
-    (check-data-app-action-query (actions.db/action-collection-id (:action_id <>)) (:dataset_query <>))))
+  (set-query-database query-action))
 
 (t2/define-before-update :model/QueryAction
   [query-action]
-  (u/prog1 (set-query-database query-action)
-    (when (contains? (t2/changes query-action) :dataset_query)
-      (check-data-app-action-query (actions.db/action-collection-id (:action_id <>)) (:dataset_query <>)))))
+  (set-query-database query-action))
 
 (defn- check-implicit-action-table
   "Throws a 400 unless `implicit-action` has a Table exactly when its Action has no model, as an action of a model writes

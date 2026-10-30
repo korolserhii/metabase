@@ -12,7 +12,6 @@
    [metabase-enterprise.remote-sync.models.remote-sync-task :as remote-sync.task]
    [metabase-enterprise.remote-sync.source.protocol :as source.p]
    [metabase-enterprise.remote-sync.test-helpers :as test-helpers]
-   [metabase.actions.core :as actions]
    [metabase.collections.models.collection :as collection]
    [metabase.lib.core :as lib]
    [metabase.lib.metadata :as lib.metadata]
@@ -223,7 +222,7 @@
                (is (not= collection-id (t2/select-one-fn :collection_id :model/Card :id metric-id)))
                (is (not (t2/exists? :model/Card :collection_id collection-id :type :metric))))
              (testing "the action is copied into the collection, on no model"
-               (is (=? {:type :query :collection_id collection-id :model_id nil}
+               (is (=? {:type :implicit :collection_id collection-id :model_id nil}
                        (t2/select-one :model/Action :entity_id (copy-eid action-id)))))
              (testing "the source is untouched"
                (is (nil? (t2/select-one-fn :collection_id :model/Action :id action-id)))))))))))
@@ -280,11 +279,11 @@
                                         :type          :question
                                         :collection_id collection-id
                                         :dataset_query (lib/query mp (lib.metadata/table mp (mt/id :venues)))}]
-            (actions/insert! {:name          "Rename venue"
-                              :type          :query
-                              :collection_id collection-id
-                              :database_id   (mt/id)
-                              :dataset_query (lib/native-query mp "UPDATE venues SET name = 'x'")})
+            (let [action-id (t2/insert-returning-pk! :model/Action {:name          "Rename venue"
+                                                                    :type          :implicit
+                                                                    :collection_id collection-id
+                                                                    :creator_id    (mt/user->id :crowberto)})]
+              (t2/insert! :model/ImplicitAction {:action_id action-id :kind "row/update" :table_id (mt/id :venues)}))
             (is (= :success (:status (export! mock))))
             (is (= #{"data_apps/sales/data_app.yaml"
                      "data_apps/sales/dist/index.js"
@@ -316,12 +315,10 @@
       (mt/with-premium-features #{:data-apps :advanced-permissions :dependencies}
         (mt/with-no-data-perms-for-all-users!
           (mt/with-model-cleanup [:model/Dependency :model/DependencyStatus]
-            (let [action-id (actions/insert! {:name          "Clear checkins"
-                                              :type          :query
-                                              :database_id   (mt/id)
-                                              :dataset_query (lib/native-query (mt/metadata-provider)
-                                                                               "DELETE FROM checkins WHERE id = {{id}}")
-                                              :parameters    [{:id "id" :slug "id" :type :number/=}]})
+            (let [action-id (t2/insert-returning-pk! :model/Action {:name       "Clear checkins"
+                                                                    :type       :implicit
+                                                                    :creator_id (mt/user->id :crowberto)})
+                  _         (t2/insert! :model/ImplicitAction {:action_id action-id :kind "row/delete" :table_id (mt/id :checkins)})
                   resources (data-apps.tu/build-resources
                              shop-collection-name shop-collection-eid
                              [{:entity_id question-eid :name "VenuesList" :query (venues-stages)}]
@@ -764,8 +761,8 @@
                   (is (true? (t2/select-one-fn :is_remote_synced :model/Collection :id other-id))))))))))))
 
 (deftest an-action-in-an-apps-collection-stays-what-a-pull-accepts-test
-  (testing "an action there can't be made public or read a card outside the collection: the next export would write it
-            into a file every pull refuses"
+  (testing "an action there can't be made public, read a card, or become a query action: the next export would write
+            it into a file every pull refuses"
     (with-data-apps-sync
       (data-apps.tu/do-with-sources!
        (fn [{:keys [action-id]}]
@@ -774,36 +771,29 @@
                                                        [action-id])
                mock      (test-helpers/create-mock-source :initial-files {"main" (shop-tree resources)})]
            (is (= :success (:status (import-at! mock "main" :force? true))))
-           (let [copy-id (t2/select-one-pk :model/Action :collection_id (shop-collection-id))
-                 card-id (t2/select-one-pk :model/Card :entity_id question-eid)
-                 reads   (fn [id]
-                           (let [tag (str "#" id)]
-                             (lib/query (mt/metadata-provider)
-                                        {:database (mt/id)
-                                         :type     :native
-                                         :native   {:query         (str "SELECT * FROM {{" tag "}}")
-                                                    :template-tags {tag {:type         :card
-                                                                         :card-id      id
-                                                                         :name         tag
-                                                                         :display-name tag
-                                                                         :id           (str (random-uuid))}}}})))]
+           (let [collection-id (shop-collection-id)
+                 copy-id       (t2/select-one-pk :model/Action :collection_id collection-id)]
              (mt/with-actions-enabled
                (mt/with-temporary-setting-values [enable-public-sharing true]
                  (mt/user-http-request :crowberto :post 400 (str "action/" copy-id "/public_link"))
                  (is (nil? (t2/select-one-fn :public_uuid :model/Action :id copy-id)))
                  (testing "the source action still can be"
-                   (mt/user-http-request :crowberto :post 200 (str "action/" action-id "/public_link"))))
-               (mt/with-temp [:model/Card {outside-id :id} {:name "Outside"}]
-                 (let [query-before (t2/select-one-fn :dataset_query :model/QueryAction :action_id copy-id)]
-                   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"can read only the app's own cards"
-                                         (actions/update! {:id copy-id :dataset_query (reads outside-id)}
-                                                          (actions/select-action :id copy-id))))
-                   (is (= query-before (t2/select-one-fn :dataset_query :model/QueryAction :action_id copy-id)))))
-               (testing "it can read the app's own card"
-                 (actions/update! {:id copy-id :dataset_query (reads card-id)} (actions/select-action :id copy-id))
-                 (is (= #{card-id}
-                        (into #{} (keep :card-id)
-                              (filter map? (tree-seq coll? seq (t2/select-one-fn :dataset_query :model/QueryAction :action_id copy-id))))))))
+                   (mt/user-http-request :crowberto :post 200 (str "action/" action-id "/public_link")))))
+             (testing "its parameters can't take values from a card"
+               (is (thrown-with-msg? clojure.lang.ExceptionInfo #"can't take a parameter's values from a card"
+                                     (t2/update! :model/Action :id copy-id
+                                                 {:parameters [{:id "name" :slug "name" :type :string/=
+                                                                :values_source_type "card"
+                                                                :values_source_config {:card_id 1}}]})))
+               (is (empty? (t2/select-one-fn :parameters :model/Action :id copy-id))))
+             (testing "a query action can't go in the collection"
+               (is (thrown-with-msg? clojure.lang.ExceptionInfo #"must be an implicit action on a table"
+                                     (t2/insert! :model/Action {:name          "Query"
+                                                                :type          :query
+                                                                :collection_id collection-id
+                                                                :creator_id    (mt/user->id :crowberto)})))
+               (is (thrown-with-msg? clojure.lang.ExceptionInfo #"must be an implicit action on a table"
+                                     (t2/update! :model/Action :id copy-id {:type :query}))))
              (is (= :success (:status (export! mock))))
              (is (= :success (:status (import-at! mock "main" :force? true)))))))))))
 

@@ -13,20 +13,6 @@
 
 (set! *warn-on-reflection* true)
 
-(defn- reading-card
-  "A native query of the action kind that reads the card with `card-id` through a card template tag."
-  [card-id]
-  (let [tag (str "#" card-id)]
-    (lib/query (mt/metadata-provider)
-               {:database (mt/id)
-                :type     :native
-                :native   {:query         (str "SELECT * FROM {{" tag "}}")
-                           :template-tags {tag {:type         :card
-                                                :card-id      card-id
-                                                :name         tag
-                                                :display-name tag
-                                                :id           (str (random-uuid))}}}})))
-
 (defn- insert-query-action!
   "Insert a query action named `action-name` running `query` in the collection with `collection-id`, as a load does,
   with `action-columns` merged into its Action row."
@@ -37,6 +23,18 @@
                                                                  :creator_id    (mt/user->id :crowberto)}
                                                                 action-columns))]
     (t2/insert! :model/QueryAction {:action_id action-id :database_id (mt/id) :dataset_query query})
+    action-id))
+
+(defn- insert-implicit-action!
+  "Insert an implicit action of no model named `action-name` that inserts into the Table with `table-id`, in the
+  collection with `collection-id`, as a load does, with `action-columns` merged into its Action row."
+  [collection-id action-name table-id & [action-columns]]
+  (let [action-id (t2/insert-returning-pk! :model/Action (merge {:name          action-name
+                                                                 :type          :implicit
+                                                                 :collection_id collection-id
+                                                                 :creator_id    (mt/user->id :crowberto)}
+                                                                action-columns))]
+    (t2/insert! :model/ImplicitAction {:action_id action-id :kind "row/create" :table_id table-id})
     action-id))
 
 (deftest card-in-apps-collection-holds-query-test
@@ -55,19 +53,18 @@
   (testing "an action is refused archived or public on insert, not only on update"
     (do-with-app-collection
      (fn [collection-id]
-       (let [query (lib/native-query (mt/metadata-provider) "UPDATE venues SET name = 'x'")]
-         (is (thrown-with-msg? clojure.lang.ExceptionInfo #"can't be archived"
-                               (insert-query-action! collection-id "Archived" query {:archived true})))
-         (is (thrown-with-msg? clojure.lang.ExceptionInfo #"can't be made public"
-                               (insert-query-action! collection-id "Public" query
-                                                     {:public_uuid       (str (random-uuid))
-                                                      :made_public_by_id (mt/user->id :crowberto)})))
-         (testing "elsewhere both are fine"
-           (mt/with-temp [:model/Collection {other-id :id} {:namespace :data-actions}]
-             (is (pos-int? (insert-query-action! other-id "Archived elsewhere" query {:archived true})))
-             (is (pos-int? (insert-query-action! other-id "Public elsewhere" query
-                                                 {:public_uuid       (str (random-uuid))
-                                                  :made_public_by_id (mt/user->id :crowberto)}))))))))))
+       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"can't be archived"
+                             (insert-implicit-action! collection-id "Archived" (mt/id :venues) {:archived true})))
+       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"can't be made public"
+                             (insert-implicit-action! collection-id "Public" (mt/id :venues)
+                                                      {:public_uuid       (str (random-uuid))
+                                                       :made_public_by_id (mt/user->id :crowberto)})))
+       (testing "elsewhere both are fine"
+         (mt/with-temp [:model/Collection {other-id :id} {:namespace :data-actions}]
+           (is (pos-int? (insert-implicit-action! other-id "Archived elsewhere" (mt/id :venues) {:archived true})))
+           (is (pos-int? (insert-implicit-action! other-id "Public elsewhere" (mt/id :venues)
+                                                  {:public_uuid       (str (random-uuid))
+                                                   :made_public_by_id (mt/user->id :crowberto)})))))))))
 
 (deftest action-in-apps-collection-takes-no-values-from-card-test
   (testing "a parameter of an action in an app's collection takes no values from a card"
@@ -75,46 +72,27 @@
      (fn [collection-id]
        (mt/with-temp [:model/Card {card-id :id} {:name "Elsewhere"}]
          (is (thrown-with-msg? clojure.lang.ExceptionInfo #"can't take a parameter's values from a card"
-                               (insert-query-action!
-                                collection-id "Rename" (lib/native-query (mt/metadata-provider) "UPDATE venues SET name = {{name}}")
+                               (insert-implicit-action!
+                                collection-id "Rename" (mt/id :venues)
                                 {:parameters [{:id                   "name"
                                                :slug                 "name"
                                                :type                 :string/=
                                                :values_source_type   "card"
                                                :values_source_config {:card_id card-id}}]}))))))))
 
-(deftest action-in-apps-collection-reads-only-apps-cards-test
-  (testing "a query action in an app's collection reads no card outside it, when it is written as a load writes it"
+(deftest query-action-in-apps-collection-is-refused-test
+  (testing "a query action can't be written into an app's collection, nor moved into it"
     (do-with-app-collection
      (fn [collection-id]
-       (data-apps.tu/with-published-tables! [(mt/id :venues)]
-         (mt/with-temp [:model/Card {outside-id :id} {:name "Elsewhere"}
-                        :model/Card {own-id :id}     {:name          "Own"
-                                                      :collection_id collection-id
-                                                      :dataset_query (data-apps.tu/venues-query)}]
-           (is (thrown-with-msg? clojure.lang.ExceptionInfo #"can read only the app's own cards"
-                                 (insert-query-action! collection-id "Reads outside" (reading-card outside-id))))
-           (let [action-id (insert-query-action! collection-id "Reads own" (reading-card own-id))]
-             (testing "changing its query to read a card outside is refused"
-               (is (thrown-with-msg? clojure.lang.ExceptionInfo #"can read only the app's own cards"
-                                     (t2/update! :model/QueryAction :action_id action-id {:dataset_query (reading-card outside-id)})))))
-           (testing "moving an action that reads a card outside into the collection is refused"
-             (mt/with-temp [:model/Collection {other-id :id} {:namespace :data-actions}]
-               (let [action-id (insert-query-action! other-id "Moved in" (reading-card outside-id))]
-                 (is (thrown-with-msg? clojure.lang.ExceptionInfo #"can read only the app's own cards"
-                                       (t2/update! :model/Action :id action-id {:collection_id collection-id})))
-                 (is (= other-id (t2/select-one-fn :collection_id :model/Action :id action-id))))))))))))
-
-(defn- insert-implicit-action!
-  "Insert an implicit action of no model named `action-name` that inserts into the Table with `table-id`, in the
-  collection with `collection-id`, as a load does."
-  [collection-id action-name table-id]
-  (let [action-id (t2/insert-returning-pk! :model/Action {:name          action-name
-                                                          :type          :implicit
-                                                          :collection_id collection-id
-                                                          :creator_id    (mt/user->id :crowberto)})]
-    (t2/insert! :model/ImplicitAction {:action_id action-id :kind "row/create" :table_id table-id})
-    action-id))
+       (let [query (lib/native-query (mt/metadata-provider) "UPDATE venues SET name = 'x'")]
+         (is (thrown-with-msg? clojure.lang.ExceptionInfo #"must be an implicit action on a table"
+                               (insert-query-action! collection-id "Query" query)))
+         (testing "moving one in"
+           (mt/with-temp [:model/Collection {other-id :id} {:namespace :data-actions}]
+             (let [action-id (insert-query-action! other-id "Moved in" query)]
+               (is (thrown-with-msg? clojure.lang.ExceptionInfo #"must be an implicit action on a table"
+                                     (t2/update! :model/Action :id action-id {:collection_id collection-id})))
+               (is (= other-id (t2/select-one-fn :collection_id :model/Action :id action-id)))))))))))
 
 (deftest implicit-action-in-apps-collection-writes-to-published-table-test
   (testing "an implicit action of no model in an app's collection writes only to a table published to the Library"
@@ -237,8 +215,7 @@
                               (mt/with-temp [:model/Card _ {:collection_id collection-id
                                                             :dataset_query (lib/native-query (mt/metadata-provider) "SELECT 1")}])))
         (is (thrown-with-msg? clojure.lang.ExceptionInfo #"can't be archived"
-                              (insert-query-action! collection-id "Archived" (lib/native-query (mt/metadata-provider) "SELECT 1")
-                                                    {:archived true})))))))
+                              (insert-implicit-action! collection-id "Archived" (mt/id :venues) {:archived true})))))))
 
 (deftest apps-collection-stays-what-it-was-given-as-test
   (testing "an app's collection can't later be moved, typed or made a sample, but remote sync may sync it and a restore may clear its
@@ -261,20 +238,19 @@
      (fn [collection-id]
        (mt/with-temp [:model/Collection {other-id :id} {:namespace :data-actions}
                       :model/Card       {card-id :id}  {:name "Elsewhere"}]
-         (let [query (lib/native-query (mt/metadata-provider) "UPDATE venues SET name = {{name}}")]
-           (doseq [[label columns message] [["archived" {:archived true} #"can't be archived"]
-                                            ["public" {:public_uuid (str (random-uuid)) :made_public_by_id (mt/user->id :crowberto)}
-                                             #"can't be made public"]
-                                            ["taking parameter values from a card"
-                                             {:parameters [{:id "name" :slug "name" :type :string/=
-                                                            :values_source_type "card"
-                                                            :values_source_config {:card_id card-id}}]}
-                                             #"can't take a parameter's values from a card"]]]
-             (testing label
-               (let [action-id (insert-query-action! other-id (str "Moved " label) query columns)]
-                 (is (thrown-with-msg? clojure.lang.ExceptionInfo message
-                                       (t2/update! :model/Action :id action-id {:collection_id collection-id})))
-                 (is (= other-id (t2/select-one-fn :collection_id :model/Action :id action-id))))))))
+         (doseq [[label columns message] [["archived" {:archived true} #"can't be archived"]
+                                          ["public" {:public_uuid (str (random-uuid)) :made_public_by_id (mt/user->id :crowberto)}
+                                           #"can't be made public"]
+                                          ["taking parameter values from a card"
+                                           {:parameters [{:id "name" :slug "name" :type :string/=
+                                                          :values_source_type "card"
+                                                          :values_source_config {:card_id card-id}}]}
+                                           #"can't take a parameter's values from a card"]]]
+           (testing label
+             (let [action-id (insert-implicit-action! other-id (str "Moved " label) (mt/id :venues) columns)]
+               (is (thrown-with-msg? clojure.lang.ExceptionInfo message
+                                     (t2/update! :model/Action :id action-id {:collection_id collection-id})))
+               (is (= other-id (t2/select-one-fn :collection_id :model/Action :id action-id)))))))
        (testing "an action of a model"
          (mt/with-actions-enabled
            (mt/with-temp [:model/Collection {model-coll :id} {:name "Models"}
@@ -287,6 +263,28 @@
                (is (thrown-with-msg? clojure.lang.ExceptionInfo #"goes in the model's collection"
                                      (t2/update! :model/Action :id action-id {:collection_id collection-id})))
                (is (= model-coll (t2/select-one-fn :collection_id :model/Action :id action-id)))))))))))
+
+(deftest card-in-apps-collection-references-no-card-test
+  (testing "a card in an app's collection takes its parameter's values from no card, not even one of the app's own"
+    (do-with-app-collection
+     (fn [collection-id]
+       (data-apps.tu/with-published-tables! [(mt/id :venues)]
+         (mt/with-temp [:model/Card {own-id :id} {:collection_id collection-id
+                                                  :dataset_query (data-apps.tu/venues-query)}]
+           (is (thrown-with-msg? clojure.lang.ExceptionInfo #"can reference no card but Library metrics"
+                                 (t2/insert! :model/Card
+                                             {:name                   "Filtered"
+                                              :display                "table"
+                                              :visualization_settings {}
+                                              :creator_id             (mt/user->id :crowberto)
+                                              :collection_id          collection-id
+                                              :dataset_query          (data-apps.tu/venues-query)
+                                              :parameters             [{:id                   "venue"
+                                                                        :slug                 "venue"
+                                                                        :name                 "Venue"
+                                                                        :type                 :string/=
+                                                                        :values_source_type   :card
+                                                                        :values_source_config {:card_id own-id}}]})))))))))
 
 (deftest card-in-apps-collection-reads-only-published-tables-through-its-macros-test
   (testing "segments, measures and remapped columns count as reads of the tables they reach"

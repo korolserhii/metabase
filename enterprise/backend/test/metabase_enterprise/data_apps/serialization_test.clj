@@ -211,11 +211,9 @@
                             :dataset_query (lib/query (mt/metadata-provider)
                                                       (lib.metadata/table (mt/metadata-provider) (mt/id :venues)))}
                            :model/Action      {action-id :id action-eid :entity_id}
-                           {:name "Rename venue" :type :query :collection_id collection-id}
-                           :model/QueryAction _
-                           {:action_id     action-id
-                            :database_id   (mt/id)
-                            :dataset_query (lib/native-query (mt/metadata-provider) "UPDATE venues SET name = 'x'")}]
+                           {:name "Rename venue" :type :implicit :collection_id collection-id}
+                           :model/ImplicitAction _
+                           {:action_id action-id :kind "row/update" :table_id (mt/id :venues)}]
               (export! dump-dir :with-collections? true)
               (testing "the files sit under the collection's directory of the data-apps namespace"
                 (doseq [path ["data_app__sales_ops.yaml" "data_app__sales_ops/venues_list.yaml"

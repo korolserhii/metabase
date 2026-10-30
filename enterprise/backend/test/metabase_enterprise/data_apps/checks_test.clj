@@ -429,25 +429,6 @@
              (is (seq (:values (mt/user-http-request :crowberto :post 200 "dataset/parameter/values"
                                                      {:parameter parameter :field_ids [(mt/id :categories :name)]})))))))))))
 
-(deftest card-parameter-endpoints-check-values-source-card-test
-  (do-with-app-collection
-   (fn [collection-id]
-     (data-apps.tu/with-published-tables! [(mt/id :venues)]
-       (mt/with-temp [:model/Card {source-id :id} {:collection_id collection-id
-                                                   :dataset_query (data-apps.tu/venues-query)}
-                      :model/Card {card-id :id}   {:collection_id collection-id
-                                                   :parameters    [(card-source-parameter source-id)]
-                                                   :dataset_query (data-apps.tu/venues-query)}]
-         (testing "a parameter whose values come from a card of the app loads them"
-           (is (seq (:values (mt/user-http-request :crowberto :get 200 (format "card/%d/params/venue/values" card-id)
-                                                   as-data-app)))))
-         (testing "a parameter whose values come from a card outside the app's collection is refused"
-           (t2/update! :model/Card :id source-id {:collection_id nil})
-           (doseq [url ["card/%d/params/venue/values" "card/%d/params/venue/search/Red" "card/%d/params/venue/remapping?value=Red"]]
-             (is (= (card-error source-id)
-                    (mt/user-http-request :crowberto :get 400 (format url card-id) as-data-app))
-                 url))))))))
-
 (defn- field-parameter
   "A parameter whose values come from the field with `field-id`."
   [field-id]
@@ -485,18 +466,20 @@
                 (mt/user-http-request :crowberto :post 400 (format "card/%d/query" elsewhere-id) as-data-app))))))))
 
 (defn- do-with-rename-action!
-  "Call `f` with the ID of a temp query action, on no model, that renames a category to itself, in the collection with
-  `collection-id`."
+  "Call `f` with the ID of a temp implicit action, on no model, that updates a category, in the collection with
+  `collection-id`, with the category Table published to the Library."
   [collection-id f]
-  (mt/with-temp [:model/Action      {action-id :id} {:name          "Rename category"
-                                                     :type          :query
-                                                     :collection_id collection-id}
-                 :model/QueryAction _               {:action_id     action-id
-                                                     :database_id   (mt/id)
-                                                     :dataset_query (lib/native-query
-                                                                     (mt/metadata-provider)
-                                                                     "UPDATE categories SET name = name WHERE id = 1")}]
-    (f action-id)))
+  (data-apps.tu/with-published-tables! [(mt/id :categories)]
+    (mt/with-temp [:model/Action         {action-id :id} {:name          "Update category"
+                                                          :type          :implicit
+                                                          :collection_id collection-id}
+                   :model/ImplicitAction _               {:action_id action-id
+                                                          :kind      "row/update"
+                                                          :table_id  (mt/id :categories)}]
+      (f action-id))))
+
+(def ^:private category-parameters
+  {:id 1 :name "African"})
 
 (deftest action-endpoints-run-app-action-test
   (mt/with-actions-test-data-and-actions-enabled
@@ -506,19 +489,19 @@
         collection-id
         (fn [action-id]
           (testing "the app's action runs, and its values endpoint answers"
-            (is (= {:rows-affected 1}
+            (is (= {:rows-updated 1}
                    (mt/user-http-request :crowberto :post 200 (format "action/%d/execute" action-id) as-data-app
-                                         {:parameters {}})))
-            (is (= {}
+                                         {:parameters category-parameters})))
+            (is (= category-parameters
                    (mt/user-http-request :crowberto :post 200 (format "action/%d/execute/values" action-id)
-                                         as-data-app {:parameters {}}))))
+                                         as-data-app {:parameters category-parameters}))))
           (testing "by its entity ID too"
-            (is (= {:rows-affected 1}
+            (is (= {:rows-updated 1}
                    (mt/user-http-request :crowberto :post 200
                                          (format "action/%s/execute"
                                                  (t2/select-one-fn :entity_id :model/Action :id action-id))
                                          as-data-app
-                                         {:parameters {}}))))))))))
+                                         {:parameters category-parameters}))))))))))
 
 (deftest action-endpoints-refuse-other-actions-test
   (mt/with-actions-test-data-and-actions-enabled
@@ -531,17 +514,17 @@
             (testing "an action outside the app's collection is refused"
               (is (= (action-error elsewhere-id)
                      (mt/user-http-request :crowberto :post 400 (format "action/%d/execute" elsewhere-id) as-data-app
-                                           {:parameters {}})))
+                                           {:parameters category-parameters})))
               (is (= (action-error elsewhere-id)
                      (mt/user-http-request :crowberto :post 400 (format "action/%d/execute/values" elsewhere-id)
-                                           as-data-app {:parameters {}}))))
+                                           as-data-app {:parameters category-parameters}))))
             (testing "an ID of no action is not found, as for any request"
               (is (= "Not found." (mt/user-http-request :crowberto :post 404 "action/999999999/execute" as-data-app
-                                                        {:parameters {}}))))
+                                                        {:parameters category-parameters}))))
             (testing "a request that is not a data app's still runs the action"
-              (is (= {:rows-affected 1}
+              (is (= {:rows-updated 1}
                      (mt/user-http-request :crowberto :post 200 (format "action/%d/execute" elsewhere-id)
-                                           {:parameters {}})))))))))))
+                                           {:parameters category-parameters})))))))))))
 
 (deftest action-read-endpoints-hold-to-app-actions-test
   (mt/with-actions-test-data-and-actions-enabled
@@ -583,7 +566,7 @@
                      (mt/user-http-request :crowberto :get 400 (format "action/%d" elsewhere-id) (as-app "wasps"))))
               (is (= (action-error elsewhere-id)
                      (mt/user-http-request :crowberto :post 400 (format "action/%d/execute" elsewhere-id) (as-app "wasps")
-                                           {:parameters {}})))))))))))
+                                           {:parameters category-parameters})))))))))))
 
 (deftest table-and-field-endpoints-check-published-tables-test
   (do-with-app-collection

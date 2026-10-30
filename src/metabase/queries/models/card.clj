@@ -1060,8 +1060,7 @@
 
 (defn- check-data-app-card
   "Throws unless `card`, when it is in a data app's collection, is a question or metric in no dashboard or document, not
-  archived, public or embedded, whose query reads only the Library, and whose other references, such as parameter
-  values, name only cards in the collection."
+  archived, public or embedded, whose query reads only the Library, and that references no card but Library metrics."
   [{:keys [collection_id] :as card}]
   (when (and (some? collection_id)
              (perms/data-app-collection? collection_id))
@@ -1080,12 +1079,10 @@
                            (keep (fn [path]
                                    (let [{:keys [model id]} (last path)]
                                      (when (and (= "Card" model) (not (metric-ids id))) id))))
-                           (serdes/serialization-dependencies "Card" card))
-          outside    (when (seq card-ids)
-                       (queries.db/card-ids-outside-collection card-ids collection_id))]
-      (when (seq outside)
-        (throw (data-app-card-error (tru "A card in a data app''s collection can reference only the app''s own cards and Library metrics, not card {0}."
-                                         (str/join ", " (sort outside)))))))))
+                           (serdes/serialization-dependencies "Card" card))]
+      (when (seq card-ids)
+        (throw (data-app-card-error (tru "A card in a data app''s collection can reference no card but Library metrics, not card {0}."
+                                         (str/join ", " (sort card-ids)))))))))
 
 (def ^:private data-app-card-columns
   "The columns [[check-data-app-card]] reads; an update that changes none of them leaves a card as it was checked."

@@ -584,10 +584,3 @@
                                                                    [:= :report_card.type "metric"]
                                                                    [:= :collection.type collections/library-metrics-collection-type]]})
       #{}))
-
-(defn card-ids-outside-collection
-  "Among `card-ids`, the IDs of the cards that are not in the collection with `collection-id`."
-  [card-ids collection-id]
-  (t2/select-pks-set :model/Card {:where [:and
-                                          [:in :id card-ids]
-                                          [:or [:= :collection_id nil] [:not= :collection_id collection-id]]]}))
